@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  # 量化数据引擎
+  data-engine:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=quant_data
+      - DB_MAX_CONNS=10
+      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_TOPIC=quant_data
+      - KAFKA_RETRIES=3
+      - API_PORT=8080
+      - API_TIMEOUT=30
+      - EXCHANGE_API_KEY=your_api_key
+      - EXCHANGE_API_SECRET=your_api_secret
+      - DATA_SOURCE_TIMEOUT=10
+      - PROCESSING_INTERVAL=30
+      - MAX_SYMBOLS=10
+      - LOG_LEVEL=info
+    depends_on:
+      - postgres
+      - kafka
+    restart: unless-stopped
+
+  # PostgreSQL数据库
+  postgres:
+    image: postgres:13-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=quant_data
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  # Kafka消息队列
+  kafka:
+    image: bitnami/kafka:3.3
+    ports:
+      - "9092:9092"
+    environment:
+      - KAFKA_CFG_NODE_ID=0
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+    volumes:
+      - kafka-data:/bitnami/kafka
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  kafka-data:
