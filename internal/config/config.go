@@ -23,7 +23,7 @@ type Config struct {
 	KafkaRetries int
 
 	// API配置
-	APIPort string
+	APIPort    string
 	APITimeout int
 
 	// 数据源配置
@@ -62,7 +62,7 @@ func LoadConfig() error {
 		KafkaRetries: getEnvAsInt("KAFKA_RETRIES", 3),
 
 		// API配置
-		APIPort: getEnv("API_PORT", "8080"),
+		APIPort:    getEnv("API_PORT", "8080"),
 		APITimeout: getEnvAsInt("API_TIMEOUT", 30),
 
 		// 数据源配置

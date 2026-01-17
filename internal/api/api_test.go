@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestServer_HealthCheck 测试健康检查接口
+// TestServer_HealthCheck  测试健康检查接口
 func TestServer_HealthCheck(t *testing.T) {
 	// 创建API服务器
 	server := NewServer()
