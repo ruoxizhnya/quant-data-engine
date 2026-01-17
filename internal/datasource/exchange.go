@@ -28,7 +28,7 @@ func NewExchangeDataSource(name, apiKey, apiSecret string) *ExchangeDataSource {
 func (e *ExchangeDataSource) GetMarketData(symbol string) ([]models.MarketData, error) {
 	// 模拟获取市场数据
 	rand.Seed(time.Now().UnixNano())
-	
+
 	data := []models.MarketData{
 		{
 			ID:        uuid.New().String(),
@@ -39,7 +39,7 @@ func (e *ExchangeDataSource) GetMarketData(symbol string) ([]models.MarketData, 
 			Source:    e.name,
 		},
 	}
-	
+
 	return data, nil
 }
 
@@ -47,20 +47,20 @@ func (e *ExchangeDataSource) GetMarketData(symbol string) ([]models.MarketData, 
 func (e *ExchangeDataSource) GetHistoricalData(symbol string, startTime, endTime string) ([]models.MarketData, error) {
 	// 模拟获取历史数据
 	rand.Seed(time.Now().UnixNano())
-	
+
 	var data []models.MarketData
-	
+
 	// 解析时间
 	start, err := time.Parse(time.RFC3339, startTime)
 	if err != nil {
 		start = time.Now().Add(-24 * time.Hour)
 	}
-	
+
 	end, err := time.Parse(time.RFC3339, endTime)
 	if err != nil {
 		end = time.Now()
 	}
-	
+
 	// 生成模拟数据
 	current := start
 	for current.Before(end) {
@@ -74,7 +74,7 @@ func (e *ExchangeDataSource) GetHistoricalData(symbol string, startTime, endTime
 		})
 		current = current.Add(1 * time.Hour)
 	}
-	
+
 	return data, nil
 }
 

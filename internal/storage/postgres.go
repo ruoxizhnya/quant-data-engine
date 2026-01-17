@@ -134,18 +134,15 @@ func (s *PostgresStorage) SaveMarketData(data []models.MarketData) error {
 	}
 	defer tx.Rollback(context.Background())
 
-	stmt, err := tx.Prepare(context.Background(), `
+	// 直接执行SQL语句，不使用预处理语句
+	query := `
 		INSERT INTO market_data (id, symbol, price, volume, timestamp, source)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (id) DO NOTHING
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to prepare statement: %w", err)
-	}
-	defer stmt.Close(context.Background())
+	`
 
 	for _, d := range data {
-		_, err := stmt.Exec(context.Background(), d.ID, d.Symbol, d.Price, d.Volume, d.Timestamp, d.Source)
+		_, err := tx.Exec(context.Background(), query, d.ID, d.Symbol, d.Price, d.Volume, d.Timestamp, d.Source)
 		if err != nil {
 			return fmt.Errorf("failed to insert market data: %w", err)
 		}

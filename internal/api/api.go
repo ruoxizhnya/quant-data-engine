@@ -1,18 +1,14 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"quant-data-engine/internal/models"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/parquet-go/parquet-go"
 	"github.com/sirupsen/logrus"
 )
 
@@ -169,38 +165,17 @@ func (s *Server) getParquetData(c *gin.Context) {
 		return
 	}
 
-	// 生成Parquet文件路径
-	parquetDir := "./data/parquet"
-	if err := os.MkdirAll(parquetDir, 0755); err != nil {
-		logrus.Errorf("Failed to create parquet directory: %v", err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
-			Error: "Failed to create parquet directory",
+	// 生成模拟Parquet数据
+	var data []map[string]interface{}
+	current := startDate
+	for current.Before(endDate) {
+		data = append(data, map[string]interface{}{
+			"timestamp": current.Unix(),
+			"symbol":    symbol,
+			"price":     1000 + float64(current.Day())*10,
+			"volume":    10000 + float64(current.Hour())*1000,
 		})
-		return
-	}
-
-	parquetFile := filepath.Join(parquetDir, fmt.Sprintf("%s_%s_%s.parquet", symbol, startDate.Format("20060102"), endDate.Format("20060102")))
-
-	// 检查文件是否存在，如果不存在则生成
-	if _, err := os.Stat(parquetFile); os.IsNotExist(err) {
-		logrus.Infof("Generating parquet file for %s from %s to %s", symbol, startDate.Format("2006-01-02"), endDate.Format("2006-01-02"))
-		if err := s.generateParquetFile(parquetFile, symbol, startDate, endDate); err != nil {
-			logrus.Errorf("Failed to generate parquet file: %v", err)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{
-				Error: "Failed to generate parquet file",
-			})
-			return
-		}
-	}
-
-	// 读取Parquet文件并返回数据
-	data, err := s.readParquetFile(parquetFile)
-	if err != nil {
-		logrus.Errorf("Failed to read parquet file: %v", err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
-			Error: "Failed to read parquet file",
-		})
-		return
+		current = current.Add(1 * time.Hour)
 	}
 
 	c.JSON(http.StatusOK, models.APIResponse{
@@ -244,77 +219,6 @@ func (s *Server) getMarketData(c *gin.Context) {
 		Message: "Market data retrieved successfully",
 		Data:    data,
 	})
-}
-
-// generateParquetFile 生成Parquet文件
-func (s *Server) generateParquetFile(filePath, symbol string, startDate, endDate time.Time) error {
-	// 定义Parquet schema
-	type ParquetData struct {
-		Timestamp int64   `parquet:"name=timestamp, type=INT64"`
-		Symbol    string  `parquet:"name=symbol, type=UTF8"`
-		Price     float64 `parquet:"name=price, type=DOUBLE"`
-		Volume    float64 `parquet:"name=volume, type=DOUBLE"`
-	}
-
-	// 创建Parquet文件
-	file, err := os.Create(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to create parquet file: %w", err)
-	}
-	defer file.Close()
-
-	// 创建Parquet writer
-	writer := parquet.NewWriter(file, new(ParquetData))
-	defer writer.Close()
-
-	// 生成模拟数据
-	current := startDate
-	for current.Before(endDate) {
-		data := ParquetData{
-			Timestamp: current.Unix(),
-			Symbol:    symbol,
-			Price:     1000 + float64(current.Day())*10,
-			Volume:    10000 + float64(current.Hour())*1000,
-		}
-
-		if err := writer.Write(data); err != nil {
-			return fmt.Errorf("failed to write to parquet file: %w", err)
-		}
-
-		current = current.Add(1 * time.Hour)
-	}
-
-	return nil
-}
-
-// readParquetFile 读取Parquet文件
-func (s *Server) readParquetFile(filePath string) ([]map[string]interface{}, error) {
-	// 打开Parquet文件
-	file, err := os.Open(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open parquet file: %w", err)
-	}
-	defer file.Close()
-
-	// 创建Parquet reader
-	reader := parquet.NewReader(file)
-	defer reader.Close()
-
-	var result []map[string]interface{}
-
-	// 读取数据
-	for {
-		row := make(map[string]interface{})
-		if err := reader.Read(row); err != nil {
-			if err.Error() == "EOF" {
-				break
-			}
-			return nil, fmt.Errorf("failed to read parquet row: %w", err)
-		}
-		result = append(result, row)
-	}
-
-	return result, nil
 }
 
 // Run 运行API服务器
