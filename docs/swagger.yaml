@@ -1,0 +1,131 @@
+basePath: /api
+definitions:
+  models.APIResponse:
+    properties:
+      data: {}
+      message:
+        type: string
+      success:
+        type: boolean
+    type: object
+  models.ErrorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+host: localhost:8082
+info:
+  contact:
+    email: support@example.com
+    name: API Support
+    url: http://www.example.com/support
+  description: 量化数据引擎API文档
+  termsOfService: http://swagger.io/terms/
+  title: Quant Data Engine API
+  version: "1.0"
+paths:
+  /backtest/data:
+    get:
+      consumes:
+      - application/json
+      description: 获取指定交易对的回测数据
+      parameters:
+      - description: 交易对符号，例如 BTCUSDT
+        in: query
+        name: symbol
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 获取回测数据
+      tags:
+      - 回测
+  /backtest/parquet:
+    get:
+      consumes:
+      - application/json
+      description: 获取指定交易对和日期范围的Parquet格式回测数据
+      parameters:
+      - description: 交易对符号，例如 BTCUSDT
+        in: query
+        name: symbol
+        required: true
+        type: string
+      - description: 开始日期，格式：YYYY-MM-DD
+        in: query
+        name: start_date
+        type: string
+      - description: 结束日期，格式：YYYY-MM-DD
+        in: query
+        name: end_date
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 获取Parquet格式的回测数据
+      tags:
+      - 回测
+  /health:
+    get:
+      consumes:
+      - application/json
+      description: 检查量化数据引擎API是否正常运行
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+      summary: 健康检查
+      tags:
+      - 系统
+  /market/data:
+    get:
+      consumes:
+      - application/json
+      description: 获取指定交易对的市场数据
+      parameters:
+      - description: 交易对符号，例如 BTCUSDT
+        in: query
+        name: symbol
+        required: true
+        type: string
+      - description: 返回数据条数，默认10
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 获取市场数据
+      tags:
+      - 市场
+schemes:
+- http
+swagger: "2.0"

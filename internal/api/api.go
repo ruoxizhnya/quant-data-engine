@@ -1,3 +1,14 @@
+// Package api 提供API服务
+// @title Quant Data Engine API
+// @version 1.0
+// @description 量化数据引擎API文档
+// @termsOfService http://swagger.io/terms/
+// @contact.name API Support
+// @contact.url http://www.example.com/support
+// @contact.email support@example.com
+// @host localhost:8080
+// @BasePath /api
+// @schemes http
 package api
 
 import (
@@ -10,6 +21,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 // Server API服务器
@@ -34,6 +47,16 @@ func NewServer() *Server {
 		}
 
 		c.Next()
+	})
+
+	// 添加Swagger UI路由
+	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler,
+		ginSwagger.URL("/swagger.json"),
+	))
+
+	// 直接提供swagger.json文件
+	router.GET("/swagger.json", func(c *gin.Context) {
+		c.File("./docs/swagger.json")
 	})
 
 	server := &Server{
@@ -69,6 +92,13 @@ func (s *Server) registerRoutes() {
 }
 
 // healthCheck 健康检查
+// @Summary 健康检查
+// @Description 检查量化数据引擎API是否正常运行
+// @Tags 系统
+// @Accept json
+// @Produce json
+// @Success 200 {object} models.APIResponse
+// @Router /health [get]
 func (s *Server) healthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{
 		Success: true,
@@ -81,6 +111,15 @@ func (s *Server) healthCheck(c *gin.Context) {
 }
 
 // getBacktestData 获取回测数据
+// @Summary 获取回测数据
+// @Description 获取指定交易对的回测数据
+// @Tags 回测
+// @Accept json
+// @Produce json
+// @Param symbol query string true "交易对符号，例如 BTCUSDT"
+// @Success 200 {object} models.APIResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Router /backtest/data [get]
 func (s *Server) getBacktestData(c *gin.Context) {
 	symbol := c.Query("symbol")
 	if symbol == "" {
@@ -109,6 +148,17 @@ func (s *Server) getBacktestData(c *gin.Context) {
 }
 
 // getParquetData 获取Parquet格式的回测数据
+// @Summary 获取Parquet格式的回测数据
+// @Description 获取指定交易对和日期范围的Parquet格式回测数据
+// @Tags 回测
+// @Accept json
+// @Produce json
+// @Param symbol query string true "交易对符号，例如 BTCUSDT"
+// @Param start_date query string false "开始日期，格式：YYYY-MM-DD"
+// @Param end_date query string false "结束日期，格式：YYYY-MM-DD"
+// @Success 200 {object} models.APIResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Router /backtest/parquet [get]
 func (s *Server) getParquetData(c *gin.Context) {
 	symbol := c.Query("symbol")
 	if symbol == "" {
@@ -186,6 +236,16 @@ func (s *Server) getParquetData(c *gin.Context) {
 }
 
 // getMarketData 获取市场数据
+// @Summary 获取市场数据
+// @Description 获取指定交易对的市场数据
+// @Tags 市场
+// @Accept json
+// @Produce json
+// @Param symbol query string true "交易对符号，例如 BTCUSDT"
+// @Param limit query int false "返回数据条数，默认10"
+// @Success 200 {object} models.APIResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Router /market/data [get]
 func (s *Server) getMarketData(c *gin.Context) {
 	symbol := c.Query("symbol")
 	if symbol == "" {
