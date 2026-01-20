@@ -1,4 +1,3 @@
-basePath: /api
 definitions:
   models.APIResponse:
     properties:
@@ -13,16 +12,8 @@ definitions:
       error:
         type: string
     type: object
-host: localhost:8082
 info:
-  contact:
-    email: support@example.com
-    name: API Support
-    url: http://www.example.com/support
-  description: 量化数据引擎API文档
-  termsOfService: http://swagger.io/terms/
-  title: Quant Data Engine API
-  version: "1.0"
+  contact: {}
 paths:
   /backtest/data:
     get:
@@ -126,6 +117,23 @@ paths:
       summary: 获取市场数据
       tags:
       - 市场
-schemes:
-- http
+  /stock/fetch-list:
+    post:
+      consumes:
+      - application/json
+      description: 手动触发从 Tushare API 获取股票列表并保存到数据库中
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 手动触发获取股票列表
+      tags:
+      - 股票
 swagger: "2.0"

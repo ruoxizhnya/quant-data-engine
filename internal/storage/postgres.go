@@ -11,6 +11,17 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// StorageInterface 存储接口
+type StorageInterface interface {
+	SaveStockBasic(data []models.StockBasic) error
+	GetStockBasic(limit int) ([]models.StockBasic, error)
+	SaveMarketData(data []models.MarketData) error
+	SaveBacktestData(data models.BacktestData) error
+	GetMarketData(symbol string, limit int) ([]models.MarketData, error)
+	GetHistoricalData(symbol string, startTime, endTime string) ([]models.MarketData, error)
+	Close()
+}
+
 // PostgresStorage PostgreSQL存储实现
 type PostgresStorage struct {
 	pool *pgxpool.Pool
@@ -102,6 +113,171 @@ func (s *PostgresStorage) initTables() error {
 	CREATE INDEX IF NOT EXISTS idx_backtest_data_end_date ON backtest_data(end_date);
 	`
 
+	// 创建股票基础信息表
+	stockBasicTableSQL := `
+	CREATE TABLE IF NOT EXISTS stock_basic (
+		ts_code VARCHAR(20) PRIMARY KEY,
+		symbol VARCHAR(20) NOT NULL,
+		name VARCHAR(50) NOT NULL,
+		area VARCHAR(20),
+		industry VARCHAR(50),
+		fullname VARCHAR(255),
+		enname VARCHAR(255),
+		cnspell VARCHAR(50),
+		market VARCHAR(20),
+		exchange VARCHAR(20),
+		curr_type VARCHAR(10),
+		list_status VARCHAR(10),
+		list_date VARCHAR(10),
+		delist_date VARCHAR(10),
+		is_hs VARCHAR(10),
+		act_name VARCHAR(100),
+		act_ent_type VARCHAR(100),
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_stock_basic_symbol ON stock_basic(symbol);
+	CREATE INDEX IF NOT EXISTS idx_stock_basic_name ON stock_basic(name);
+	CREATE INDEX IF NOT EXISTS idx_stock_basic_list_status ON stock_basic(list_status);
+	CREATE INDEX IF NOT EXISTS idx_stock_basic_market ON stock_basic(market);
+	`
+
+	// 创建交易日历表
+	tradeCalTableSQL := `
+	CREATE TABLE IF NOT EXISTS trade_cal (
+		exchange VARCHAR(20) NOT NULL,
+		cal_date VARCHAR(10) NOT NULL,
+		is_open VARCHAR(10) NOT NULL,
+		pre_trade_date VARCHAR(10),
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (exchange, cal_date)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_trade_cal_cal_date ON trade_cal(cal_date);
+	CREATE INDEX IF NOT EXISTS idx_trade_cal_is_open ON trade_cal(is_open);
+	`
+
+	// 创建新股上市列表表
+	newShareTableSQL := `
+	CREATE TABLE IF NOT EXISTS new_share (
+		ts_code VARCHAR(20) PRIMARY KEY,
+		sub_code VARCHAR(20) NOT NULL,
+		name VARCHAR(50) NOT NULL,
+		ipo_date VARCHAR(10),
+		issue_date VARCHAR(10),
+		amount DOUBLE PRECISION,
+		market_amount DOUBLE PRECISION,
+		price DOUBLE PRECISION,
+		pe DOUBLE PRECISION,
+		limit_amount DOUBLE PRECISION,
+		funds DOUBLE PRECISION,
+		ballot DOUBLE PRECISION,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_new_share_ipo_date ON new_share(ipo_date);
+	CREATE INDEX IF NOT EXISTS idx_new_share_issue_date ON new_share(issue_date);
+	`
+
+	// 创建上市公司基础信息表
+	stockCompanyTableSQL := `
+	CREATE TABLE IF NOT EXISTS stock_company (
+		ts_code VARCHAR(20) PRIMARY KEY,
+		com_name VARCHAR(100) NOT NULL,
+		com_id VARCHAR(50),
+		exchange VARCHAR(20),
+		chairman VARCHAR(50),
+		manager VARCHAR(50),
+		secretary VARCHAR(50),
+		reg_capital DOUBLE PRECISION,
+		setup_date VARCHAR(10),
+		province VARCHAR(20),
+		city VARCHAR(20),
+		introduction TEXT,
+		website VARCHAR(255),
+		email VARCHAR(100),
+		office VARCHAR(255),
+		employees INTEGER,
+		main_business TEXT,
+		business_scope TEXT,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_stock_company_exchange ON stock_company(exchange);
+	CREATE INDEX IF NOT EXISTS idx_stock_company_province ON stock_company(province);
+	`
+
+	// 创建上市公司管理层表
+	stkManagersTableSQL := `
+	CREATE TABLE IF NOT EXISTS stk_managers (
+		ts_code VARCHAR(20) NOT NULL,
+		ann_date VARCHAR(10) NOT NULL,
+		name VARCHAR(50) NOT NULL,
+		gender VARCHAR(10),
+		lev VARCHAR(20),
+		title VARCHAR(100),
+		edu VARCHAR(50),
+		national VARCHAR(50),
+		birthday VARCHAR(20),
+		begin_date VARCHAR(10),
+		end_date VARCHAR(10),
+		resume TEXT,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (ts_code, ann_date, name)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_stk_managers_ts_code ON stk_managers(ts_code);
+	CREATE INDEX IF NOT EXISTS idx_stk_managers_ann_date ON stk_managers(ann_date);
+	`
+
+	// 创建管理层薪酬和持股表
+	stkRewardsTableSQL := `
+	CREATE TABLE IF NOT EXISTS stk_rewards (
+		ts_code VARCHAR(20) NOT NULL,
+		ann_date VARCHAR(10) NOT NULL,
+		end_date VARCHAR(10) NOT NULL,
+		name VARCHAR(50) NOT NULL,
+		title VARCHAR(100),
+		reward DOUBLE PRECISION,
+		hold_vol DOUBLE PRECISION,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (ts_code, ann_date, end_date, name)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_stk_rewards_ts_code ON stk_rewards(ts_code);
+	CREATE INDEX IF NOT EXISTS idx_stk_rewards_end_date ON stk_rewards(end_date);
+	`
+
+	// 创建A股日线行情表
+	dailyTableSQL := `
+	CREATE TABLE IF NOT EXISTS daily (
+		ts_code VARCHAR(20) NOT NULL,
+		trade_date VARCHAR(10) NOT NULL,
+		open DOUBLE PRECISION,
+		high DOUBLE PRECISION,
+		low DOUBLE PRECISION,
+		close DOUBLE PRECISION,
+		pre_close DOUBLE PRECISION,
+		change DOUBLE PRECISION,
+		pct_chg DOUBLE PRECISION,
+		vol DOUBLE PRECISION,
+		amount DOUBLE PRECISION,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (ts_code, trade_date)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_daily_ts_code ON daily(ts_code);
+	CREATE INDEX IF NOT EXISTS idx_daily_trade_date ON daily(trade_date);
+	CREATE INDEX IF NOT EXISTS idx_daily_pct_chg ON daily(pct_chg);
+	`
+
 	// 执行SQL语句
 	if _, err := s.pool.Exec(context.Background(), marketDataTableSQL); err != nil {
 		return fmt.Errorf("failed to create market_data table: %w", err)
@@ -109,6 +285,34 @@ func (s *PostgresStorage) initTables() error {
 
 	if _, err := s.pool.Exec(context.Background(), backtestDataTableSQL); err != nil {
 		return fmt.Errorf("failed to create backtest_data table: %w", err)
+	}
+
+	if _, err := s.pool.Exec(context.Background(), stockBasicTableSQL); err != nil {
+		return fmt.Errorf("failed to create stock_basic table: %w", err)
+	}
+
+	if _, err := s.pool.Exec(context.Background(), tradeCalTableSQL); err != nil {
+		return fmt.Errorf("failed to create trade_cal table: %w", err)
+	}
+
+	if _, err := s.pool.Exec(context.Background(), newShareTableSQL); err != nil {
+		return fmt.Errorf("failed to create new_share table: %w", err)
+	}
+
+	if _, err := s.pool.Exec(context.Background(), stockCompanyTableSQL); err != nil {
+		return fmt.Errorf("failed to create stock_company table: %w", err)
+	}
+
+	if _, err := s.pool.Exec(context.Background(), stkManagersTableSQL); err != nil {
+		return fmt.Errorf("failed to create stk_managers table: %w", err)
+	}
+
+	if _, err := s.pool.Exec(context.Background(), stkRewardsTableSQL); err != nil {
+		return fmt.Errorf("failed to create stk_rewards table: %w", err)
+	}
+
+	if _, err := s.pool.Exec(context.Background(), dailyTableSQL); err != nil {
+		return fmt.Errorf("failed to create daily table: %w", err)
 	}
 
 	return nil
@@ -311,4 +515,85 @@ func (s *PostgresStorage) Close() {
 		s.pool.Close()
 		logrus.Info("PostgreSQL connection pool closed")
 	}
+}
+
+// SaveStockBasic 保存股票基础信息
+func (s *PostgresStorage) SaveStockBasic(data []models.StockBasic) error {
+	if len(data) == 0 {
+		return nil
+	}
+
+	// 使用批量插入
+	tx, err := s.pool.Begin(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(context.Background())
+
+	// 直接执行SQL语句
+	query := `
+		INSERT INTO stock_basic (
+			ts_code, symbol, name, area, industry, fullname, enname, cnspell, 
+			market, exchange, curr_type, list_status, list_date, delist_date, is_hs, 
+			act_name, act_ent_type, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP
+		) ON CONFLICT (ts_code) DO UPDATE SET
+			symbol = $2, name = $3, area = $4, industry = $5, fullname = $6, enname = $7, cnspell = $8, 
+			market = $9, exchange = $10, curr_type = $11, list_status = $12, list_date = $13, delist_date = $14, is_hs = $15, 
+			act_name = $16, act_ent_type = $17, updated_at = CURRENT_TIMESTAMP
+	`
+
+	for _, d := range data {
+		_, err := tx.Exec(context.Background(), query,
+			d.TSCode, d.Symbol, d.Name, d.Area, d.Industry, d.Fullname, d.Enname, d.Cnspell,
+			d.Market, d.Exchange, d.CurrType, d.ListStatus, d.ListDate, d.DelistDate, d.IsHS,
+			d.ActName, d.ActEntType,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert stock basic data: %w", err)
+		}
+	}
+
+	if err := tx.Commit(context.Background()); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	logrus.Infof("Saved %d stock basic data records", len(data))
+	return nil
+}
+
+// GetStockBasic 获取股票基础信息
+func (s *PostgresStorage) GetStockBasic(limit int) ([]models.StockBasic, error) {
+	rows, err := s.pool.Query(context.Background(), `
+		SELECT ts_code, symbol, name, area, industry, fullname, enname, cnspell, 
+			market, exchange, curr_type, list_status, list_date, delist_date, is_hs, 
+			act_name, act_ent_type, created_at, updated_at
+		FROM stock_basic
+		ORDER BY ts_code ASC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query stock basic data: %w", err)
+	}
+	defer rows.Close()
+
+	var data []models.StockBasic
+	for rows.Next() {
+		var d models.StockBasic
+		if err := rows.Scan(
+			&d.TSCode, &d.Symbol, &d.Name, &d.Area, &d.Industry, &d.Fullname, &d.Enname, &d.Cnspell,
+			&d.Market, &d.Exchange, &d.CurrType, &d.ListStatus, &d.ListDate, &d.DelistDate, &d.IsHS,
+			&d.ActName, &d.ActEntType, &d.CreatedAt, &d.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan stock basic data: %w", err)
+		}
+		data = append(data, d)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating stock basic data rows: %w", err)
+	}
+
+	return data, nil
 }

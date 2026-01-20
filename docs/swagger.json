@@ -1,21 +1,8 @@
 {
-    "schemes": [
-        "http"
-    ],
     "swagger": "2.0",
     "info": {
-        "description": "量化数据引擎API文档",
-        "title": "Quant Data Engine API",
-        "termsOfService": "http://swagger.io/terms/",
-        "contact": {
-            "name": "API Support",
-            "url": "http://www.example.com/support",
-            "email": "support@example.com"
-        },
-        "version": "1.0"
+        "contact": {}
     },
-    "host": "localhost:8082",
-    "basePath": "/api",
     "paths": {
         "/backtest/data": {
             "get": {
@@ -165,6 +152,35 @@
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/stock/fetch-list": {
+            "post": {
+                "description": "手动触发从 Tushare API 获取股票列表并保存到数据库中",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "股票"
+                ],
+                "summary": "手动触发获取股票列表",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }

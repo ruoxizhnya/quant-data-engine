@@ -8,6 +8,7 @@ import (
 	"quant-data-engine/internal/config"
 	"quant-data-engine/internal/datasource"
 	"quant-data-engine/internal/kafka"
+	"quant-data-engine/internal/schedule"
 	"quant-data-engine/internal/storage"
 	"syscall"
 	"time"
@@ -16,6 +17,9 @@ import (
 )
 
 func main() {
+	// 设置日志级别为Debug
+	logrus.SetLevel(logrus.DebugLevel)
+
 	// 加载配置
 	if err := config.LoadConfig(); err != nil {
 		logrus.Fatalf("Failed to load config: %v", err)
@@ -46,8 +50,17 @@ func main() {
 	dataSourceFactory.Register("binance", datasource.NewExchangeDataSource("binance", config.AppConfig.ExchangeAPIKey, config.AppConfig.ExchangeAPISecret))
 	dataSourceFactory.Register("okx", datasource.NewExchangeDataSource("okx", config.AppConfig.ExchangeAPIKey, config.AppConfig.ExchangeAPISecret))
 
+	// 初始化 Tushare 客户端
+	tushareClient := datasource.NewTushareClient()
+
+	// 初始化定时任务调度器
+	scheduler := schedule.NewScheduler(tushareClient, db)
+
+	// 启动定时任务
+	scheduler.Start()
+
 	// 初始化API服务器
-	apiServer := api.NewServer()
+	apiServer := api.NewServer(tushareClient, db)
 
 	// 启动API服务器
 	go func() {

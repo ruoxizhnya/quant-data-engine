@@ -7,14 +7,16 @@
 // @contact.url http://www.example.com/support
 // @contact.email support@example.com
 // @host localhost:8080
-// @BasePath /api
+// @BasePath /
 // @schemes http
 package api
 
 import (
 	"fmt"
 	"net/http"
+	"quant-data-engine/internal/datasource"
 	"quant-data-engine/internal/models"
+	"quant-data-engine/internal/storage"
 	"strconv"
 	"sync"
 	"time"
@@ -27,12 +29,14 @@ import (
 
 // Server API服务器
 type Server struct {
-	router *gin.Engine
-	mutex  sync.RWMutex
+	router        *gin.Engine
+	mutex         sync.RWMutex
+	tushareClient datasource.TushareClientInterface
+	storage       storage.StorageInterface
 }
 
 // NewServer 创建API服务器
-func NewServer() *Server {
+func NewServer(tushareClient datasource.TushareClientInterface, storage storage.StorageInterface) *Server {
 	router := gin.Default()
 
 	// 配置CORS
@@ -60,7 +64,9 @@ func NewServer() *Server {
 	})
 
 	server := &Server{
-		router: router,
+		router:        router,
+		tushareClient: tushareClient,
+		storage:       storage,
 	}
 
 	// 注册路由
@@ -71,23 +77,26 @@ func NewServer() *Server {
 
 // registerRoutes 注册路由
 func (s *Server) registerRoutes() {
-	api := s.router.Group("/api")
+	// 健康检查
+	s.router.GET("/health", s.healthCheck)
+
+	// 回测数据相关
+	backtest := s.router.Group("/backtest")
 	{
-		// 健康检查
-		api.GET("/health", s.healthCheck)
+		backtest.GET("/data", s.getBacktestData)
+		backtest.GET("/parquet", s.getParquetData)
+	}
 
-		// 回测数据相关
-		backtest := api.Group("/backtest")
-		{
-			backtest.GET("/data", s.getBacktestData)
-			backtest.GET("/parquet", s.getParquetData)
-		}
+	// 市场数据相关
+	market := s.router.Group("/market")
+	{
+		market.GET("/data", s.getMarketData)
+	}
 
-		// 市场数据相关
-		market := api.Group("/market")
-		{
-			market.GET("/data", s.getMarketData)
-		}
+	// 股票数据相关
+	stock := s.router.Group("/stock")
+	{
+		stock.POST("/fetch-list", s.fetchStockList)
 	}
 }
 
@@ -285,4 +294,176 @@ func (s *Server) getMarketData(c *gin.Context) {
 func (s *Server) Run(port string) error {
 	logrus.Infof("Starting API server on port %s", port)
 	return s.router.Run(":" + port)
+}
+
+// fetchStockList 手动触发获取股票列表
+// @Summary 手动触发获取股票列表
+// @Description 手动触发从 Tushare API 获取股票列表并保存到数据库中
+// @Tags 股票
+// @Accept json
+// @Produce json
+// @Success 200 {object} models.APIResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /stock/fetch-list [post]
+func (s *Server) fetchStockList(c *gin.Context) {
+	logrus.Info("Manually triggering stock list fetch")
+
+	// 准备请求参数
+	req := &datasource.StockBasicRequest{
+		ListStatus: "L", // 只获取上市的股票
+	}
+	fields := []string{
+		"ts_code", "symbol", "name", "area", "industry", "fullname", "enname", "cnspell",
+		"market", "exchange", "curr_type", "list_status", "list_date", "delist_date", "is_hs",
+		"act_name", "act_ent_type",
+	}
+
+	// 输出请求详细信息
+	logrus.Debugf("Requesting stock basic info with params: %+v", req)
+	logrus.Debugf("Requesting fields: %+v", fields)
+
+	// 调用 Tushare API 获取股票基础信息
+	resp, err := s.tushareClient.GetStockBasic(req, fields)
+
+	// 输出响应详细信息
+	if resp != nil {
+		logrus.Debugf("Tushare API response code: %d", resp.Code)
+		logrus.Debugf("Tushare API response message: %s", resp.Message)
+		if resp.Data != nil {
+			logrus.Debugf("Tushare API response fields: %+v", resp.Data.Fields)
+			logrus.Debugf("Tushare API response items count: %d", len(resp.Data.Items))
+			if len(resp.Data.Items) > 0 {
+				logrus.Debugf("First item: %+v", resp.Data.Items[0])
+			}
+		}
+	}
+
+	if err != nil {
+		logrus.Errorf("Failed to fetch stock list: %v", err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error: fmt.Sprintf("Failed to fetch stock list: %v", err),
+		})
+		return
+	}
+
+	// 解析响应数据
+	var stockList []models.StockBasic
+	if resp.Data != nil && len(resp.Data.Items) > 0 {
+		for _, item := range resp.Data.Items {
+			stock := models.StockBasic{}
+
+			// 解析字段
+			for i, field := range resp.Data.Fields {
+				if i < len(item) {
+					switch field {
+					case "ts_code":
+						if v, ok := item[i].(string); ok {
+							stock.TSCode = v
+						}
+					case "symbol":
+						if v, ok := item[i].(string); ok {
+							stock.Symbol = v
+						}
+					case "name":
+						if v, ok := item[i].(string); ok {
+							stock.Name = v
+						}
+					case "area":
+						if v, ok := item[i].(string); ok {
+							stock.Area = v
+						}
+					case "industry":
+						if v, ok := item[i].(string); ok {
+							stock.Industry = v
+						}
+					case "fullname":
+						if v, ok := item[i].(string); ok {
+							stock.Fullname = v
+						}
+					case "enname":
+						if v, ok := item[i].(string); ok {
+							stock.Enname = v
+						}
+					case "cnspell":
+						if v, ok := item[i].(string); ok {
+							stock.Cnspell = v
+						}
+					case "market":
+						if v, ok := item[i].(string); ok {
+							stock.Market = v
+						}
+					case "exchange":
+						if v, ok := item[i].(string); ok {
+							stock.Exchange = v
+						}
+					case "curr_type":
+						if v, ok := item[i].(string); ok {
+							stock.CurrType = v
+						}
+					case "list_status":
+						if v, ok := item[i].(string); ok {
+							stock.ListStatus = v
+						}
+					case "list_date":
+						if v, ok := item[i].(string); ok {
+							stock.ListDate = v
+						}
+					case "delist_date":
+						if v, ok := item[i].(string); ok {
+							stock.DelistDate = v
+						}
+					case "is_hs":
+						if v, ok := item[i].(string); ok {
+							stock.IsHS = v
+						}
+					case "act_name":
+						if v, ok := item[i].(string); ok {
+							stock.ActName = v
+						}
+					case "act_ent_type":
+						if v, ok := item[i].(string); ok {
+							stock.ActEntType = v
+						}
+					}
+				}
+			}
+
+			// 添加到列表
+			stockList = append(stockList, stock)
+		}
+	}
+
+	logrus.Infof("Fetched %d stocks from Tushare API", len(stockList))
+	if len(stockList) > 0 {
+		logrus.Debugf("First 5 stocks: %+v", stockList[:min(5, len(stockList))])
+	}
+
+	// 保存到数据库
+	if len(stockList) > 0 {
+		logrus.Debugf("Saving %d stocks to database", len(stockList))
+		if err := s.storage.SaveStockBasic(stockList); err != nil {
+			logrus.Errorf("Failed to save stock list: %v", err)
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+				Error: fmt.Sprintf("Failed to save stock list: %v", err),
+			})
+			return
+		}
+		logrus.Infof("Successfully saved %d stocks to database", len(stockList))
+	}
+
+	c.JSON(http.StatusOK, models.APIResponse{
+		Success: true,
+		Message: "Stock list fetched and saved successfully",
+		Data: map[string]interface{}{
+			"count": len(stockList),
+		},
+	})
+}
+
+// min returns the smaller of x or y
+func min(x, y int) int {
+	if x < y {
+		return x
+	}
+	return y
 }

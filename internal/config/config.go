@@ -29,6 +29,7 @@ type Config struct {
 	// 数据源配置
 	ExchangeAPIKey    string
 	ExchangeAPISecret string
+	TushareAPIKey     string
 	DataSourceTimeout int
 
 	// 数据处理配置
@@ -44,7 +45,16 @@ var AppConfig *Config
 func LoadConfig() error {
 	// 加载.env文件
 	if err := godotenv.Load(); err != nil {
-		logrus.Warn("No .env file found, using environment variables")
+		// 尝试从项目根目录加载
+		if err := godotenv.Load(".env"); err != nil {
+			// 尝试从上级目录加载
+			if err := godotenv.Load("../.env"); err != nil {
+				// 尝试从两级上级目录加载
+				if err := godotenv.Load("../../.env"); err != nil {
+					logrus.Warn("No .env file found, using environment variables")
+				}
+			}
+		}
 	}
 
 	AppConfig = &Config{
@@ -68,6 +78,7 @@ func LoadConfig() error {
 		// 数据源配置
 		ExchangeAPIKey:    getEnv("EXCHANGE_API_KEY", ""),
 		ExchangeAPISecret: getEnv("EXCHANGE_API_SECRET", ""),
+		TushareAPIKey:     getEnv("TUSHARE_API_TOKEN", ""),
 		DataSourceTimeout: getEnvAsInt("DATA_SOURCE_TIMEOUT", 10),
 
 		// 数据处理配置
