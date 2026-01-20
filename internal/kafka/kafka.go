@@ -74,6 +74,19 @@ func (p *KafkaProducer) SendMarketData(data []models.MarketData) error {
 		}
 	}
 
+	// 记录日志但不实际发送消息
+	logrus.Infof("[Kafka disabled] Would send %d market data messages to Kafka", len(data))
+	logrus.Debugf("[Kafka disabled] First market data: %+v", data[0])
+
+	return nil
+}
+
+// sendMarketDataToKafka 实际发送市场数据到Kafka
+func (p *KafkaProducer) sendMarketDataToKafka(data []models.MarketData) error {
+	if len(data) == 0 {
+		return nil
+	}
+
 	// 用于跟踪发送失败的消息
 	var failedMessages int
 
@@ -136,6 +149,15 @@ func validateMarketDataForKafka(data models.MarketData) error {
 
 // SendBacktestData 发送回测数据到Kafka
 func (p *KafkaProducer) SendBacktestData(data models.BacktestData) error {
+	// 记录日志但不实际发送消息
+	logrus.Infof("[Kafka disabled] Would send backtest data message for symbol %s to Kafka", data.Symbol)
+	logrus.Debugf("[Kafka disabled] Backtest data: %+v", data)
+
+	return nil
+}
+
+// sendBacktestDataToKafka 实际发送回测数据到Kafka
+func (p *KafkaProducer) sendBacktestDataToKafka(data models.BacktestData) error {
 	// 将数据转换为JSON
 	jsonData, err := json.Marshal(data)
 	if err != nil {

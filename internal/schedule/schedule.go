@@ -62,7 +62,7 @@ func (s *Scheduler) fetchStockList() {
 	if resp.Data != nil && len(resp.Data.Items) > 0 {
 		for _, item := range resp.Data.Items {
 			stock := models.StockBasic{}
-			
+
 			// 解析字段
 			for i, field := range resp.Data.Fields {
 				if i < len(item) {
