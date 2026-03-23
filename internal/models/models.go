@@ -148,6 +148,20 @@ type Daily struct {
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
 
+// A股日线前复权行情模型（匹配现有数据库schema）
+type OHLCVDailyQFQ struct {
+	Symbol    string    `json:"symbol" db:"symbol"`
+	TradeDate string    `json:"trade_date" db:"trade_date"`
+	Open      float64   `json:"open" db:"open"`
+	High      float64   `json:"high" db:"high"`
+	Low       float64   `json:"low" db:"low"`
+	Close     float64   `json:"close" db:"close"`
+	Volume    float64   `json:"volume" db:"volume"`
+	Turnover  float64   `json:"turnover" db:"turnover"`
+	TradeDays int       `json:"trade_days" db:"trade_days"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+}
+
 // API响应模型
 type APIResponse struct {
 	Success bool        `json:"success"`

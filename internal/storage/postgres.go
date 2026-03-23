@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"quant-data-engine/internal/config"
 	"quant-data-engine/internal/models"
@@ -19,6 +20,13 @@ type StorageInterface interface {
 	SaveBacktestData(data models.BacktestData) error
 	GetMarketData(symbol string, limit int) ([]models.MarketData, error)
 	GetHistoricalData(symbol string, startTime, endTime string) ([]models.MarketData, error)
+	SaveOHLCVDailyQFQ(data []models.OHLCVDailyQFQ) error
+	GetOHLCVCountBySymbol(tsCode string) (int64, error)
+	GetExistingDateRangeForSymbol(tsCode string) (string, string, error)
+	GetAllStockCodes() ([]string, error)
+	GetStockListDate(symbol string) (string, error)
+	SaveTradeCalendar(data []models.TradeCal) error
+	UpsertTradeCal(exchange, calDate, isOpen, preTradeDate string) error
 	Close()
 }
 
@@ -278,6 +286,20 @@ func (s *PostgresStorage) initTables() error {
 	CREATE INDEX IF NOT EXISTS idx_daily_pct_chg ON daily(pct_chg);
 	`
 
+	// 创建A股日线前复权行情表（ohlcv_daily_qfq已存在，使用现有schema）
+	// 现有表结构: symbol, trade_date, open, high, low, close, volume, turnover, trade_days, created_at
+
+	// 创建交易日历表（简化版，按日期索引）
+	tradeCalendarTableSQL := `
+	CREATE TABLE IF NOT EXISTS trade_calendar (
+		trade_date DATE PRIMARY KEY,
+		is_trading_day BOOLEAN DEFAULT TRUE,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_trade_calendar_is_trading ON trade_calendar(is_trading_day);
+	`
+
 	// 执行SQL语句
 	if _, err := s.pool.Exec(context.Background(), marketDataTableSQL); err != nil {
 		return fmt.Errorf("failed to create market_data table: %w", err)
@@ -313,6 +335,10 @@ func (s *PostgresStorage) initTables() error {
 
 	if _, err := s.pool.Exec(context.Background(), dailyTableSQL); err != nil {
 		return fmt.Errorf("failed to create daily table: %w", err)
+	}
+
+	if _, err := s.pool.Exec(context.Background(), tradeCalendarTableSQL); err != nil {
+		return fmt.Errorf("failed to create trade_calendar table: %w", err)
 	}
 
 	return nil
@@ -596,4 +622,152 @@ func (s *PostgresStorage) GetStockBasic(limit int) ([]models.StockBasic, error) 
 	}
 
 	return data, nil
+}
+
+// SaveOHLCVDailyQFQ 保存前复权日线行情数据（匹配现有ohlcv_daily_qfq表schema）
+func (s *PostgresStorage) SaveOHLCVDailyQFQ(data []models.OHLCVDailyQFQ) error {
+	if len(data) == 0 {
+		return nil
+	}
+
+	tx, err := s.pool.Begin(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(context.Background())
+
+	query := `
+		INSERT INTO ohlcv_daily_qfq (symbol, trade_date, open, high, low, close, volume, turnover, trade_days, created_at)
+		VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8, 0, CURRENT_TIMESTAMP)
+		ON CONFLICT (symbol, trade_date) DO NOTHING
+	`
+
+	for _, d := range data {
+		_, err := tx.Exec(context.Background(), query,
+			d.Symbol, d.TradeDate, d.Open, d.High, d.Low, d.Close, d.Volume, d.Turnover,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert ohlcv_daily_qfq: %w", err)
+		}
+	}
+
+	if err := tx.Commit(context.Background()); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	logrus.Debugf("Saved %d ohlcv_daily_qfq records", len(data))
+	return nil
+}
+
+// GetOHLCVCountBySymbol 获取指定股票已存在的OHLCV记录数
+func (s *PostgresStorage) GetOHLCVCountBySymbol(tsCode string) (int64, error) {
+	var count int64
+	err := s.pool.QueryRow(context.Background(), `
+		SELECT COUNT(*) FROM ohlcv_daily_qfq WHERE symbol = $1
+	`, tsCode).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count ohlcv_daily_qfq: %w", err)
+	}
+	return count, nil
+}
+
+// GetExistingDateRangeForSymbol 获取指定股票已存在的日期范围
+func (s *PostgresStorage) GetExistingDateRangeForSymbol(tsCode string) (string, string, error) {
+	var minDate, maxDate sql.NullString
+	err := s.pool.QueryRow(context.Background(), `
+		SELECT MIN(trade_date::text), MAX(trade_date::text) FROM ohlcv_daily_qfq WHERE symbol = $1
+	`, tsCode).Scan(&minDate, &maxDate)
+	if err != nil {
+		return "", "", nil
+	}
+	if !minDate.Valid {
+		return "", "", nil
+	}
+	return minDate.String, maxDate.String, nil
+}
+
+// GetAllStockCodes 获取所有股票的symbol（从stocks表）
+func (s *PostgresStorage) GetAllStockCodes() ([]string, error) {
+	rows, err := s.pool.Query(context.Background(), `
+		SELECT symbol FROM stocks ORDER BY symbol
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query stock codes: %w", err)
+	}
+	defer rows.Close()
+
+	var codes []string
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			return nil, fmt.Errorf("failed to scan stock code: %w", err)
+		}
+		codes = append(codes, code)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating stock codes: %w", err)
+	}
+	return codes, nil
+}
+
+// GetStockListDate 获取股票上市日期
+func (s *PostgresStorage) GetStockListDate(symbol string) (string, error) {
+	var listDate sql.NullString
+	err := s.pool.QueryRow(context.Background(), `
+		SELECT list_date::text FROM stocks WHERE symbol = $1
+	`, symbol).Scan(&listDate)
+	if err != nil {
+		return "", nil
+	}
+	if !listDate.Valid {
+		return "", nil
+	}
+	return listDate.String, nil
+}
+
+// SaveTradeCalendar 批量保存交易日历
+func (s *PostgresStorage) SaveTradeCalendar(data []models.TradeCal) error {
+	if len(data) == 0 {
+		return nil
+	}
+
+	tx, err := s.pool.Begin(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(context.Background())
+
+	query := `
+		INSERT INTO trade_calendar (trade_date, is_trading_day, created_at)
+		VALUES ($1::date, $2, CURRENT_TIMESTAMP)
+		ON CONFLICT (trade_date) DO UPDATE SET is_trading_day = $2
+	`
+
+	for _, d := range data {
+		isTrading := d.IsOpen == "1" || d.IsOpen == "true"
+		_, err := tx.Exec(context.Background(), query, d.CalDate, isTrading)
+		if err != nil {
+			return fmt.Errorf("failed to insert trade_calendar: %w", err)
+		}
+	}
+
+	if err := tx.Commit(context.Background()); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	logrus.Infof("Saved %d trade_calendar records", len(data))
+	return nil
+}
+
+// UpsertTradeCal 单条保存或更新交易日历
+func (s *PostgresStorage) UpsertTradeCal(exchange, calDate, isOpen, preTradeDate string) error {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO trade_calendar (trade_date, is_trading_day, created_at)
+		VALUES ($1::date, $2, CURRENT_TIMESTAMP)
+		ON CONFLICT (trade_date) DO UPDATE SET is_trading_day = $2
+	`, calDate, isOpen == "1")
+	if err != nil {
+		return fmt.Errorf("failed to upsert trade_cal: %w", err)
+	}
+	return nil
 }

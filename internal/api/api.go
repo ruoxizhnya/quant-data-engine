@@ -98,6 +98,14 @@ func (s *Server) registerRoutes() {
 	{
 		stock.POST("/fetch-list", s.fetchStockList)
 	}
+
+	// 同步相关
+	sync := s.router.Group("/sync")
+	{
+		sync.POST("/ohlcv/full", s.syncOHLCVFull)
+		sync.POST("/trade-calendar", s.syncTradeCalendar)
+		sync.GET("/ohlcv/status", s.getOHLCVStatus)
+	}
 }
 
 // healthCheck 健康检查
@@ -456,6 +464,396 @@ func (s *Server) fetchStockList(c *gin.Context) {
 		Message: "Stock list fetched and saved successfully",
 		Data: map[string]interface{}{
 			"count": len(stockList),
+		},
+	})
+}
+
+// SyncOHLCVFullRequest 全量OHLCV同步请求
+type SyncOHLCVFullRequest struct {
+	Symbols   []string `json:"symbols"`   // 指定股票列表，为空则同步所有
+	StartYear int      `json:"start_year"` // 起始年份，默认2000
+	EndYear   int      `json:"end_year"`   // 结束年份，默认当前年份
+}
+
+// syncOHLCVFull 全量OHLCV前复权数据同步
+// @Summary 全量OHLCV前复权数据同步
+// @Description 按年分段同步A股日线前复权(OHLCV QFQ)数据，支持指定股票列表或全量同步
+// @Tags 同步
+// @Accept json
+// @Produce json
+// @Param request body SyncOHLCVFullRequest true "同步参数"
+// @Success 200 {object} models.APIResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /sync/ohlcv/full [post]
+func (s *Server) syncOHLCVFull(c *gin.Context) {
+	var req SyncOHLCVFullRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request: " + err.Error()})
+		return
+	}
+
+	// 默认参数
+	if req.StartYear == 0 {
+		req.StartYear = 2000
+	}
+	if req.EndYear == 0 {
+		req.EndYear = time.Now().Year()
+	}
+
+	// 获取股票列表
+	var tsCodes []string
+	if len(req.Symbols) > 0 {
+		tsCodes = req.Symbols
+	} else {
+		codes, err := s.storage.GetAllStockCodes()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to get stock codes: " + err.Error()})
+			return
+		}
+		tsCodes = codes
+	}
+
+	logrus.Infof("Starting OHLCV QFQ sync for %d stocks, years %d-%d", len(tsCodes), req.StartYear, req.EndYear)
+
+	// 同步字段
+	fields := []string{"ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount"}
+
+	totalSynced := 0
+	totalSkipped := 0
+	totalErrors := 0
+
+	// 遍历每只股票
+	for _, tsCode := range tsCodes {
+		logrus.Infof("Syncing %s", tsCode)
+
+		// 检查已存在的日期范围
+		existingMin, existingMax, _ := s.storage.GetExistingDateRangeForSymbol(tsCode)
+		if existingMin != "" && existingMax != "" {
+			logrus.Debugf("%s already has data from %s to %s, will fill gaps", tsCode, existingMin, existingMax)
+		}
+
+		// 按年分段同步
+		for year := req.StartYear; year <= req.EndYear; year++ {
+			startDate := fmt.Sprintf("%d0101", year)
+			endDate := fmt.Sprintf("%d1231", year)
+
+			// 获取日线数据（未复权）
+			dailyResp, err := s.tushareClient.GetDaily(&datasource.DailyRequest{
+				TSCode:    tsCode,
+				StartDate: startDate,
+				EndDate:   endDate,
+			}, fields)
+			if err != nil {
+				logrus.Errorf("Failed to fetch daily for %s year %d: %v", tsCode, year, err)
+				totalErrors++
+				continue
+			}
+			if dailyResp == nil || dailyResp.Data == nil || len(dailyResp.Data.Items) == 0 {
+				logrus.Debugf("No daily data for %s year %d", tsCode, year)
+				totalSkipped++
+				time.Sleep(250 * time.Millisecond)
+				continue
+			}
+
+			// 获取复权因子
+			adjResp, err := s.tushareClient.GetAdjFactor(&datasource.AdjFactorRequest{
+				TSCode:    tsCode,
+				StartDate: startDate,
+				EndDate:   endDate,
+			}, []string{"ts_code", "trade_date", "adj_factor"})
+			if err != nil {
+				logrus.Errorf("Failed to fetch adj_factor for %s year %d: %v", tsCode, year, err)
+				totalErrors++
+				time.Sleep(250 * time.Millisecond)
+				continue
+			}
+
+			// 构建复权因子映射
+			adjMap := make(map[string]float64)
+			var lastAdjFactor float64 = 1.0
+			if adjResp != nil && adjResp.Data != nil {
+				for _, item := range adjResp.Data.Items {
+					tradeDate := ""
+					var adjFactor float64 = 1.0
+					for i, field := range adjResp.Data.Fields {
+						if i < len(item) {
+							switch field {
+							case "trade_date":
+								if v, ok := item[i].(string); ok {
+									tradeDate = v
+								}
+							case "adj_factor":
+								if v, ok := item[i].(float64); ok {
+									adjFactor = v
+								} else if v, ok := item[i].(int); ok {
+									adjFactor = float64(v)
+								}
+							}
+						}
+					}
+					if tradeDate != "" {
+						adjMap[tradeDate] = adjFactor
+						lastAdjFactor = adjFactor
+					}
+				}
+			}
+
+			// 解析并应用复权
+			var ohlcvList []models.OHLCVDailyQFQ
+			for _, item := range dailyResp.Data.Items {
+				ohlcv := models.OHLCVDailyQFQ{}
+				var tradeDate string
+				var unadjClose float64
+
+				for i, field := range dailyResp.Data.Fields {
+					if i < len(item) {
+						switch field {
+						case "ts_code":
+							if v, ok := item[i].(string); ok {
+								ohlcv.Symbol = v
+							}
+						case "trade_date":
+							if v, ok := item[i].(string); ok {
+								tradeDate = v
+								ohlcv.TradeDate = v
+							}
+						case "open":
+							if v, ok := item[i].(float64); ok {
+								ohlcv.Open = v
+							} else if v, ok := item[i].(int); ok {
+								ohlcv.Open = float64(v)
+							}
+						case "high":
+							if v, ok := item[i].(float64); ok {
+								ohlcv.High = v
+							} else if v, ok := item[i].(int); ok {
+								ohlcv.High = float64(v)
+							}
+						case "low":
+							if v, ok := item[i].(float64); ok {
+								ohlcv.Low = v
+							} else if v, ok := item[i].(int); ok {
+								ohlcv.Low = float64(v)
+							}
+						case "close":
+							if v, ok := item[i].(float64); ok {
+								unadjClose = v
+								ohlcv.Close = v
+							} else if v, ok := item[i].(int); ok {
+								unadjClose = float64(v)
+								ohlcv.Close = float64(v)
+							}
+						case "vol":
+							if v, ok := item[i].(float64); ok {
+								ohlcv.Volume = v
+							} else if v, ok := item[i].(int); ok {
+								ohlcv.Volume = float64(v)
+							}
+						case "amount":
+							if v, ok := item[i].(float64); ok {
+								ohlcv.Turnover = v
+							} else if v, ok := item[i].(int); ok {
+								ohlcv.Turnover = float64(v)
+							}
+						}
+					}
+				}
+
+				// 应用前复权调整因子
+				if tradeDate != "" && ohlcv.Symbol != "" {
+					adjFactor := adjMap[tradeDate]
+					if adjFactor == 0 {
+						adjFactor = lastAdjFactor
+					}
+					if adjFactor > 0 && adjFactor != 1.0 {
+						ohlcv.Open = ohlcv.Open * adjFactor
+						ohlcv.High = ohlcv.High * adjFactor
+						ohlcv.Low = ohlcv.Low * adjFactor
+						ohlcv.Close = unadjClose * adjFactor
+					}
+					ohlcvList = append(ohlcvList, ohlcv)
+				}
+			}
+
+			if len(ohlcvList) > 0 {
+				if err := s.storage.SaveOHLCVDailyQFQ(ohlcvList); err != nil {
+					logrus.Errorf("Failed to save OHLCV for %s year %d: %v", tsCode, year, err)
+					totalErrors++
+				} else {
+					totalSynced += len(ohlcvList)
+					logrus.Infof("Saved %d QFQ records for %s year %d", len(ohlcvList), tsCode, year)
+				}
+			} else {
+				totalSkipped++
+			}
+
+			// 速率限制：250ms
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+
+	logrus.Infof("OHLCV sync completed: %d records synced, %d years skipped, %d errors",
+		totalSynced, totalSkipped, totalErrors)
+
+	c.JSON(http.StatusOK, models.APIResponse{
+		Success: true,
+		Message: "OHLCV QFQ sync completed",
+		Data: map[string]interface{}{
+			"total_synced":  totalSynced,
+			"total_skipped": totalSkipped,
+			"total_errors":  totalErrors,
+			"stocks_count":  len(tsCodes),
+			"start_year":    req.StartYear,
+			"end_year":      req.EndYear,
+		},
+	})
+}
+
+// syncTradeCalendar 同步交易日历
+// @Summary 同步交易日历
+// @Description 从Tushare同步交易日历到trade_calendar表
+// @Tags 同步
+// @Accept json
+// @Produce json
+// @Success 200 {object} models.APIResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /sync/trade-calendar [post]
+func (s *Server) syncTradeCalendar(c *gin.Context) {
+	logrus.Info("Starting trade calendar sync")
+
+	// Tushare trade_cal API字段
+	fields := []string{"exchange", "cal_date", "is_open", "pre_trade_date"}
+
+	// 同步最近20年的数据
+	endDate := time.Now().Format("20060102")
+	startDate := fmt.Sprintf("%d0101", time.Now().Year()-20)
+
+	req := &datasource.TradeCalRequest{
+		Exchange:  "",
+		StartDate: startDate,
+		EndDate:   endDate,
+		IsOpen:    "",
+	}
+
+	resp, err := s.tushareClient.GetTradeCal(req, fields)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to fetch trade cal: " + err.Error()})
+		return
+	}
+
+	if resp == nil || resp.Data == nil || len(resp.Data.Items) == 0 {
+		c.JSON(http.StatusOK, models.APIResponse{
+			Success: true,
+			Message: "No trade calendar data returned",
+			Data:    map[string]interface{}{"count": 0},
+		})
+		return
+	}
+
+	// 解析并保存
+	var tradeCalList []models.TradeCal
+	for _, item := range resp.Data.Items {
+		tc := models.TradeCal{}
+		for i, field := range resp.Data.Fields {
+			if i < len(item) {
+				switch field {
+				case "exchange":
+					if v, ok := item[i].(string); ok {
+						tc.Exchange = v
+					}
+				case "cal_date":
+					if v, ok := item[i].(string); ok {
+						tc.CalDate = v
+					}
+				case "is_open":
+					if v, ok := item[i].(string); ok {
+						tc.IsOpen = v
+					}
+				case "pre_trade_date":
+					if v, ok := item[i].(string); ok {
+						tc.PreTradeDate = v
+					}
+				}
+			}
+		}
+		if tc.CalDate != "" {
+			tradeCalList = append(tradeCalList, tc)
+		}
+	}
+
+	if err := s.storage.SaveTradeCalendar(tradeCalList); err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to save trade calendar: " + err.Error()})
+		return
+	}
+
+	logrus.Infof("Saved %d trade calendar records", len(tradeCalList))
+
+	c.JSON(http.StatusOK, models.APIResponse{
+		Success: true,
+		Message: "Trade calendar synced successfully",
+		Data: map[string]interface{}{
+			"count": len(tradeCalList),
+		},
+	})
+}
+
+// getOHLCVStatus 获取OHLCV同步状态
+// @Summary 获取OHLCV同步状态
+// @Description 查看各股票的OHLCV数据同步情况
+// @Tags 同步
+// @Accept json
+// @Produce json
+// @Success 200 {object} models.APIResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /sync/ohlcv/status [get]
+func (s *Server) getOHLCVStatus(c *gin.Context) {
+	tsCode := c.Query("ts_code")
+
+	if tsCode != "" {
+		count, _ := s.storage.GetOHLCVCountBySymbol(tsCode)
+		minDate, maxDate, _ := s.storage.GetExistingDateRangeForSymbol(tsCode)
+		c.JSON(http.StatusOK, models.APIResponse{
+			Success: true,
+			Message: "OHLCV status retrieved",
+			Data: map[string]interface{}{
+				"ts_code":   tsCode,
+				"count":     count,
+				"min_date":  minDate,
+				"max_date":  maxDate,
+			},
+		})
+		return
+	}
+
+	// 返回总体统计
+	codes, err := s.storage.GetAllStockCodes()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	stats := make([]map[string]interface{}, 0, min(100, len(codes)))
+	for _, code := range codes {
+		if len(stats) >= 100 {
+			break
+		}
+		count, _ := s.storage.GetOHLCVCountBySymbol(code)
+		minDate, maxDate, _ := s.storage.GetExistingDateRangeForSymbol(code)
+		stats = append(stats, map[string]interface{}{
+			"ts_code":  code,
+			"count":    count,
+			"min_date": minDate,
+			"max_date": maxDate,
+		})
+	}
+
+	c.JSON(http.StatusOK, models.APIResponse{
+		Success: true,
+		Message: "OHLCV status retrieved",
+		Data: map[string]interface{}{
+			"total_stocks": len(codes),
+			"sample":       stats,
 		},
 	})
 }

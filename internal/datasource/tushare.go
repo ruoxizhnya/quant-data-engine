@@ -23,6 +23,8 @@ type TushareClientInterface interface {
 	GetStkManagers(req *StkManagersRequest, fields []string) (*TushareResponse, error)
 	GetStkRewards(req *StkRewardsRequest, fields []string) (*TushareResponse, error)
 	GetDaily(req *DailyRequest, fields []string) (*TushareResponse, error)
+	GetProBar(req *ProBarRequest, fields []string) (*TushareResponse, error)
+	GetAdjFactor(req *AdjFactorRequest, fields []string) (*TushareResponse, error)
 }
 
 // TushareClient Tushare API客户端
@@ -115,6 +117,19 @@ type DailyRequest struct {
 	TradeDate string `json:"trade_date,omitempty"`
 	StartDate string `json:"start_date,omitempty"`
 	EndDate   string `json:"end_date,omitempty"`
+}
+
+// ProBarRequest 行情数据请求参数（支持复权）
+type ProBarRequest struct {
+	TSCode   string `json:"ts_code,omitempty"`
+	SecID    string `json:"sec_id,omitempty"`
+	StartDate string `json:"start_date,omitempty"`
+	EndDate  string `json:"end_date,omitempty"`
+	Asset    string `json:"asset,omitempty"`    // E:股票, F:基金, O:期权, C:债券, I:指数, default: E
+	Exchange string `json:"exchange,omitempty"`  // 上交所: SH, 深交所: SZ, 中金所: CFFEX, 上期所: SHFE, 大商所: DCE, 郑商所: CZCE, default: None
+	Freq     string `json:"freq,omitempty"`     // D:日线, W:周线, M:月线, Y:年线, default: D
+	Adj      string `json:"adj,omitempty"`      // qfq:前复权, hfq:后复权, None:不复权, default: qfq
+	Factor   string `json:"factor,omitempty"`    // True:返回复权因子, False:不返回, default: True
 }
 
 // GetStockBasic 获取股票基础信息
@@ -217,6 +232,74 @@ func (c *TushareClient) GetStkRewards(req *StkRewardsRequest, fields []string) (
 	}
 
 	return c.callAPI("stk_rewards", params, fields)
+}
+
+// GetProBar 获取行情数据（支持复权）
+// 注意：此方法仅在Python SDK中可用，HTTP API使用GetDaily+GetAdjFactor组合实现复权
+func (c *TushareClient) GetProBar(req *ProBarRequest, fields []string) (*TushareResponse, error) {
+	params := make(map[string]interface{})
+	if req.TSCode != "" {
+		params["ts_code"] = req.TSCode
+	}
+	if req.SecID != "" {
+		params["sec_id"] = req.SecID
+	}
+	if req.StartDate != "" {
+		params["start_date"] = req.StartDate
+	}
+	if req.EndDate != "" {
+		params["end_date"] = req.EndDate
+	}
+	if req.Asset != "" {
+		params["asset"] = req.Asset
+	} else {
+		params["asset"] = "E" // 股票
+	}
+	if req.Exchange != "" {
+		params["exchange"] = req.Exchange
+	}
+	if req.Freq != "" {
+		params["freq"] = req.Freq
+	} else {
+		params["freq"] = "D" // 日线
+	}
+	if req.Adj != "" {
+		params["adj"] = req.Adj
+	} else {
+		params["adj"] = "qfq" // 前复权
+	}
+	if req.Factor != "" {
+		params["factor"] = req.Factor
+	}
+
+	return c.callAPI("pro_bar", params, fields)
+}
+
+// AdjFactorRequest 复权因子请求参数
+type AdjFactorRequest struct {
+	TSCode    string `json:"ts_code,omitempty"`
+	TradeDate string `json:"trade_date,omitempty"`
+	StartDate string `json:"start_date,omitempty"`
+	EndDate   string `json:"end_date,omitempty"`
+}
+
+// GetAdjFactor 获取复权因子
+func (c *TushareClient) GetAdjFactor(req *AdjFactorRequest, fields []string) (*TushareResponse, error) {
+	params := make(map[string]interface{})
+	if req.TSCode != "" {
+		params["ts_code"] = req.TSCode
+	}
+	if req.TradeDate != "" {
+		params["trade_date"] = req.TradeDate
+	}
+	if req.StartDate != "" {
+		params["start_date"] = req.StartDate
+	}
+	if req.EndDate != "" {
+		params["end_date"] = req.EndDate
+	}
+
+	return c.callAPI("adj_factor", params, fields)
 }
 
 // GetDaily 获取A股日线行情
